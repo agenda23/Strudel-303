@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "strudel-tb303": {
+      "command": "npx",
+      "args": ["-y", "tsx", "d:/workspace/303seq/mcp/server.ts"],
+      "env": {}
+    }
+  }
+}
