@@ -6,6 +6,7 @@ declare module '@strudel/web' {
   export function samples(...args: any[]): Promise<any>;
   export const webaudioOutput: any;
   export function registerSound(key: string, onTrigger: any, data?: any): void;
+  export function getSuperdoughAudioController(): any;
   export const Pattern: any;
   export * from '@strudel/core';
 }

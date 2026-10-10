@@ -59,6 +59,21 @@ describe('slide planning (bridge level)', () => {
   });
 });
 
+describe('filter model controls', () => {
+  it('tbfilter / tbdrive reach the voice parameters and default to the previous sound', () => {
+    const st = initialSlideState();
+    const base = planTrigger({ note: 36 }, 0, 0.25, st)!;
+    expect(base.params.filterModel).toBe('tpt');
+    expect(base.params.filterDrive).toBeUndefined();
+    const p = planTrigger({ note: 36, tbfilter: 'diode', tbdrive: 0.4 }, 1, 0.25, st)!;
+    expect(p.params.filterModel).toBe('diode');
+    expect(p.params.filterDrive).toBeCloseTo(0.4);
+    expect(planTrigger({ note: 36, tbasym: 0.9 }, 4, 0.25, st)!.params.filterAsym).toBeCloseTo(0.9);
+    expect(planTrigger({ note: 36, tbfilter: 'nonsense', tbdrive: 9 }, 2, 0.25, st)!.params.filterModel).toBe('tpt');
+    expect(planTrigger({ note: 36, tbdrive: 9 }, 3, 0.25, st)!.params.filterDrive).toBe(1);
+  });
+});
+
 describe('Strudel-compatible pitch resolution', () => {
   it('note names follow Strudel octave convention (c3 = 48)', () => {
     expect(noteNameToMidi('c3')).toBe(48);
@@ -93,5 +108,40 @@ describe('distortion bypass', () => {
       return sum;
     };
     expect(run(false)).not.toBeCloseTo(run(true), 3);
+  });
+});
+
+describe('chained slides (legato runs across several notes)', () => {
+  it('a run of slide=1 notes glides through every note without retriggering the envelopes', () => {
+    const SR = 44100;
+    const step = 60 / 138 / 4;
+    const midi = [33, 45, 40, 52, 45, 57, 52, 45, 38, 33];
+    const slide = [1, 1, 1, 1, 1, 1, 1, 0, 0, 0];
+    const st = initialSlideState();
+    const v: any = new TB303Voice();
+    Object.assign(v.params, { cutoff: 500, resonance: 0.8, envMod: 0.7, decay: 0.35, slideTime: 0.06 });
+    const into: boolean[] = [];
+    for (let i = 0; i < midi.length; i++) {
+      const plan = planTrigger({ note: midi[i], slide: slide[i], accent: i === 2 || i === 5 ? 1 : 0 }, i * step, step, st, {})!;
+      into.push(plan.slide);
+      v.applyNoteParams(plan.params, plan.explicit);
+      v.triggerNote(plan.freq, plan.accent, plan.slide, plan.gateDuration, SR);
+      const from = v.currentPitch;
+      let maxMegRise = 0, minVeg = 9, at60 = 0;
+      for (let n = 0; n < step * SR; n++) {
+        const m0 = v.megLevel;
+        v.process(SR);
+        maxMegRise = Math.max(maxMegRise, v.megLevel - m0);
+        minVeg = Math.min(minVeg, v.vegLevel);
+        if (n === Math.floor(0.06 * SR)) at60 = v.currentPitch;
+      }
+      if (i >= 1 && i <= 7) {
+        // glided into: no MEG retrigger, VCA stays open, pitch ~95% of the way in 60 ms
+        expect(maxMegRise).toBeLessThan(1e-6);
+        if (i <= 6) expect(minVeg).toBeGreaterThan(0.95);
+        expect((at60 - from) / (plan.freq - from)).toBeGreaterThan(0.9);
+      }
+    }
+    expect(into).toEqual([false, true, true, true, true, true, true, true, false, false]);
   });
 });

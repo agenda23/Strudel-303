@@ -28,6 +28,9 @@ export class DistortionUnit {
   // DC blocker state
   private dcInputPrev = 0.0;
   private dcOutputPrev = 0.0;
+  // Level-matching: mean-square trackers of the dry input and the raw wet output
+  private msIn = 0.0;
+  private msWet = 0.0;
 
   /**
    * Process a single audio sample through the distortion unit.
@@ -101,9 +104,15 @@ export class DistortionUnit {
     this.dcInputPrev = filtered;
     this.dcOutputPrev = dcCleaned;
 
-    // Compensate output level so it sits comfortably in mix
-    const postGain = 1.0 / (1.0 + drive * 1.8);
-    const outputWet = dcCleaned * postGain * 1.5;
+    // Level matching: a saturator's output level is nearly independent of its input level,
+    // so drive would otherwise act as a huge volume knob (+12 dB at drive 0.25). Track the
+    // short-term power of the dry input and the wet output (~8 ms) and scale the wet signal so
+    // that engaging the distortion changes tone, not loudness.
+    const track = 1.0 - Math.exp(-1.0 / (0.008 * sampleRate));
+    this.msIn += track * (input * input - this.msIn);
+    this.msWet += track * (dcCleaned * dcCleaned - this.msWet);
+    const makeup = Math.min(2.0, Math.sqrt((this.msIn + 1e-9) / (this.msWet + 1e-9)));
+    const outputWet = dcCleaned * makeup;
 
     // Dry / Wet crossfade
     const mix = Math.max(0.0, Math.min(1.0, this.params.mix));
@@ -114,5 +123,7 @@ export class DistortionUnit {
     this.toneState = 0.0;
     this.dcInputPrev = 0.0;
     this.dcOutputPrev = 0.0;
+    this.msIn = 0.0;
+    this.msWet = 0.0;
   }
 }

@@ -52,7 +52,7 @@ npm run build
 // ⚡ 138 BPM クラシック・アシッド
 setcps(138/60/4)
 
-$: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
+$: n("0 0 7 4 ~ 2 3 0").scale("c2:minor")
   .s("tb303")
   .accent("0 1 0 0 0 1 0 0")
   .slide("0 0 1 0 0 0 1 0")
@@ -62,8 +62,8 @@ $: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
   .tbdec(0.24)
   .gain(0.9)
 
-$: s("bd*4, ~ cp ~ cp").bank("RolandTR909")
-$: s("hh*8, [~ oh]*4").bank("RolandTR909").cut(1)
+$: s("bd*4, ~ cp ~ cp").bank("RolandTR909").gain(0.6)
+$: s("hh*8, [~ oh]*4").bank("RolandTR909").gain(0.35).cut(1)
 ```
 
 `cut(1)` はハイハット系（`hh` / `oh` / `rd`）だけに掛けてください。キックやクラップと同じブロックに掛けると、ハイハットで切られてしまいます。

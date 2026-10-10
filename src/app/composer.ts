@@ -1,6 +1,7 @@
 /**
  * Procedural & AI Pattern Generator for Strudel x TB-303
  */
+import { buildAcidTrack } from './generator';
 
 const SYSTEM_PROMPT = `You are an electronic music producer specializing in Acid Techno with Strudel.
 Generate valid Strudel live coding patterns using TB-303 (.s("tb303")) and Roland TR-909 drums.
@@ -9,17 +10,19 @@ SYNTAX RULES:
 1. TB-303 basslines:
    - Must use .s("tb303")
    - Use .scale("root:scale") e.g. "c2:minor", "d2:phrygian", "f1:dorian"
+   - n() values are SCALE DEGREES (0 = root, 7 = one octave up, 4 = fifth). Never use 12 for an octave; keep jumps within 0..8
    - Use .accent("...") with 0 and 1
    - Use .slide("...") with 0 and 1
-   - Use .tbcut(...) for cutoff (e.g. sine.range(min, max).slow(cycles))
+   - For continuous knob moves put cutoff/resonance/envmod/decay on a lane, NOT on the notes: $: s("tb303ctl").segment(96).tbcut(sine.range(300, 2400).slow(8)).tbres(sine.range(0.78, 0.93).slow(12)); layer signals with .add()/.mul()
+   - Use .tbcut(...) only for a fixed cutoff per note
    - Use .tbres(0.0 to 1.0)
    - Use .tbenv(0.0 to 1.0)
    - Use .tbdec(0.1 to 1.5)
    - Optional: .tbwave("saw" or "square")
    - Optional distortion: .tbdist(0.0 to 1.0), .tbdisttone(0.0 to 1.0), .tbdisttype("rat"|"tube"|"fuzz")
 2. Drums:
-   - $: s("bd*4, ~ cp ~ cp").bank("RolandTR909")
-   - $: s("hh*8, [~ oh]*4").bank("RolandTR909").cut(1)   (choke only hats)
+   - $: s("bd*4, ~ cp ~ cp").bank("RolandTR909").gain(0.6)
+   - $: s("hh*8, [~ oh]*4").bank("RolandTR909").gain(0.35).cut(1)   (choke only hats)
 
 OUTPUT FORMAT:
 Output ONLY clean executable JavaScript pattern code. Do not wrap in markdown prose.`;
@@ -222,52 +225,39 @@ export class AIAgentComposer {
     const isSquare = /square|hollow|fuzz/i.test(promptText);
     const isTrance = /trance|goa|psy|hypnotic/i.test(promptText);
     const isMinimal = /minimal|detroit|deep|clean/i.test(promptText);
+    const pick = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
+    const rnd = (min: number, span: number) => min + Math.random() * span;
 
     const bpm = isTrance ? 142 : isHard ? 140 : isMinimal ? 132 : 138;
-    const scales = isTrance ? ['d2:phrygian', 'e2:minor', 'a1:minor'] :
-                   isHard ? ['c2:minor', 'f1:phrygian', 'd2:minor'] :
-                   ['c2:minor', 'g1:minor', 'bb1:dorian'];
-    const scale = scales[Math.floor(Math.random() * scales.length)];
+    const scale = pick(
+      isTrance ? ['d2:phrygian', 'e2:minor', 'a1:minor'] : isHard ? ['c2:minor', 'f1:phrygian', 'd2:minor'] : ['c2:minor', 'g1:minor', 'bb1:dorian'],
+    );
+    const notes = pick([
+      '0 0 7 4 ~ 2 3 0 0 7 6 4 ~ 3 2 0',
+      '0 2 4 6 7 6 4 2 0 4 7 8 7 4 3 2',
+      '0 ~ 0 7 ~ 4 2 3 0 0 ~ 6 7 ~ 4 0',
+      '0 0 0 7 ~ 2 0 4 0 7 0 2 ~ 4 3 0',
+    ]);
 
-    const notePatterns = [
-      '0 0 12 7 ~ 3 5 0 0 12 10 7 ~ 5 3 0',
-      '0 3 7 10 12 10 7 3 0 7 12 14 12 7 5 3',
-      '0 ~ 0 12 ~ 7 3 5 0 0 ~ 10 12 ~ 7 0',
-      '0 0 0 12 ~ 3 0 7 0 12 0 3 ~ 7 5 0',
-    ];
-    const notes = notePatterns[Math.floor(Math.random() * notePatterns.length)];
-
-    const accents = isHard ? '1 0 1 0 0 1 0 1 1 0 0 1 0 1 1 0' : '0 1 0 0 0 1 0 0 0 0 1 0 0 1 0 0';
-    const slides = isTrance ? '0 1 0 0 1 0 1 0 0 1 0 0 1 0 0 0' : '0 0 1 0 0 0 1 0 0 0 0 1 0 0 1 0';
-
-    const wave = isSquare ? 'square' : 'saw';
-    const distDrive = isHard ? (0.75 + Math.random() * 0.2).toFixed(2) : (0.2 + Math.random() * 0.4).toFixed(2);
-    const distType = isHard ? (isSquare ? 'fuzz' : 'rat') : 'tube';
-    const distTone = (0.55 + Math.random() * 0.25).toFixed(2);
-
-    const cutoffLow = isMinimal ? 250 : 350;
-    const cutoffHigh = isHard ? 3800 : 3200;
-    const lfoSpeed = isTrance ? 8 : 4;
-
-    return `// Generated Acid Pattern (${bpm} BPM)
-setcps(${bpm}/60/4)
-
-$: n("${notes}").scale("${scale}")
-  .s("tb303")
-  .tbwave("${wave}")
-  .accent("${accents}")
-  .slide("${slides}")
-  .tbcut(sine.range(${cutoffLow}, ${cutoffHigh}).slow(${lfoSpeed}))
-  .tbres(${(0.80 + Math.random() * 0.12).toFixed(2)})
-  .tbenv(${(0.65 + Math.random() * 0.15).toFixed(2)})
-  .tbdec(${(0.18 + Math.random() * 0.10).toFixed(2)})
-  .tbdist(${distDrive})
-  .tbdisttone(${distTone})
-  .tbdisttype("${distType}")
-  .gain(0.9)
-
-$: s("bd*4, ~ cp ~ cp").bank("RolandTR909")
-$: s("hh*8, [~ oh]*4").bank("RolandTR909").cut(1)
-`;
+    return buildAcidTrack({
+      label: 'Generated Acid Track',
+      bpm,
+      scale,
+      notes,
+      accents: isHard ? '1 0 1 0 0 1 0 1 1 0 0 1 0 1 1 0' : '0 1 0 0 0 1 0 0 0 0 1 0 0 1 0 0',
+      slides: isTrance ? '0 1 0 0 1 0 1 0 0 1 0 0 1 0 0 0' : '0 0 1 0 0 0 1 0 0 0 0 1 0 0 1 0',
+      wave: isSquare ? 'square' : 'saw',
+      cutoffLow: isMinimal ? 250 : 350,
+      cutoffHigh: isHard ? 3800 : 3200,
+      lfoSlow: isTrance ? 8 : 4,
+      res: rnd(0.8, 0.12),
+      env: rnd(0.65, 0.15),
+      dec: rnd(0.18, 0.1),
+      dist: {
+        drive: isHard ? rnd(0.75, 0.2) : rnd(0.2, 0.4),
+        tone: rnd(0.55, 0.25),
+        type: isHard ? (isSquare ? 'fuzz' : 'rat') : 'tube',
+      },
+    });
   }
 }

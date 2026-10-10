@@ -19,6 +19,12 @@ export const TB303_CONTROL_NAMES = [
   'tbdisttone',
   'tbdistmix',
   'tbdisttype',
+  'tbfilter',
+  'tbdrive',
+  'tbasym',
+  'tbrel',
+  'tbglide',
+  'tbslidecurve',
 ] as const;
 
 export function defineTB303Controls(registerControl: (name: string) => Record<string, any>): Record<string, any> {

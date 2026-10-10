@@ -1,17 +1,9 @@
-import { TB303Voice, DEFAULT_TB303_PARAMS, type TB303Params } from '../dsp/tb303';
-
-interface ScheduledEvent {
-  time: number; // Scheduled onset time in AudioContext seconds
-  freq: number;
-  accent: boolean;
-  slide: boolean;
-  gateDuration: number;
-  params?: Partial<TB303Params>;
-}
+import { TB303Voice } from '../dsp/tb303';
+import { applyVoiceEvent, type VoiceEvent } from '../dsp/events';
 
 class TB303WorkletProcessor extends AudioWorkletProcessor {
   private voice: TB303Voice;
-  private eventQueue: ScheduledEvent[] = [];
+  private eventQueue: VoiceEvent[] = [];
   private frameCounter = 0;
 
   constructor() {
@@ -23,16 +15,25 @@ class TB303WorkletProcessor extends AudioWorkletProcessor {
       if (!data) return;
 
       if (data.type === 'trigger') {
-        this.eventQueue.push({
+        this.schedule({
+          kind: 'note',
           time: typeof data.time === 'number' ? data.time : 0,
           freq: data.freq,
           accent: Boolean(data.accent),
           slide: Boolean(data.slide),
           gateDuration: data.gateDuration || 0.1,
           params: data.params,
+          explicit: Array.isArray(data.explicit) ? data.explicit : [],
         });
-        // Sort events chronologically by absolute AudioContext time
-        this.eventQueue.sort((a, b) => a.time - b.time);
+      } else if (data.type === 'knobs') {
+        this.schedule({
+          kind: 'knobs',
+          time: typeof data.time === 'number' ? data.time : 0,
+          values: data.values || {},
+          rampSec: typeof data.rampSec === 'number' ? data.rampSec : 0.03,
+        });
+      } else if (data.type === 'clearKnobs') {
+        this.schedule({ kind: 'clearKnobs', time: typeof data.time === 'number' ? data.time : 0 });
       } else if (data.type === 'setParam') {
         if (data.param && data.value !== undefined) {
           (this.voice.params as any)[data.param] = data.value;
@@ -50,6 +51,12 @@ class TB303WorkletProcessor extends AudioWorkletProcessor {
         this.eventQueue = [];
       }
     };
+  }
+
+  private schedule(evt: VoiceEvent): void {
+    this.eventQueue.push(evt);
+    // Sort events chronologically by absolute AudioContext time
+    this.eventQueue.sort((a, b) => a.time - b.time);
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
@@ -71,18 +78,7 @@ class TB303WorkletProcessor extends AudioWorkletProcessor {
 
       // Execute events scheduled at or before this sample time
       while (this.eventQueue.length > 0 && this.eventQueue[0].time <= sampleTime) {
-        const evt = this.eventQueue.shift()!;
-        if (evt.params) {
-          // B-3: Reset to defaults before applying event-specific parameters
-          this.voice.params = { ...DEFAULT_TB303_PARAMS, ...evt.params };
-        }
-        this.voice.triggerNote(
-          evt.freq,
-          evt.accent,
-          evt.slide,
-          evt.gateDuration,
-          sampleRate
-        );
+        applyVoiceEvent(this.voice, this.eventQueue.shift()!, sampleRate);
       }
 
       const sample = this.voice.process(sampleRate);

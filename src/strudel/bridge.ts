@@ -1,7 +1,7 @@
 import { registerSound } from '@strudel/web';
 import tb303WorkletUrl from '../worklet/tb303.worklet.ts?worker&url';
 import type { TB303Params } from '../dsp/tb303';
-import { initialSlideState, planTrigger, type SlideState } from './trigger';
+import { extractKnobs, initialSlideState, planTrigger, type SlideState } from './trigger';
 
 /** Seconds the tap stays open after the gate closes (VEG release tail). */
 const TAIL_SEC = 0.2;
@@ -53,6 +53,30 @@ export class TB303Bridge {
       (t: number, value: any, onended: () => void) => this.trigger(t, value, onended),
       { type: 'synth' },
     );
+
+    // Knob lane: `s("tb303ctl").segment(64).tbcut(sine.range(300, 2400).slow(8))` turns Strudel
+    // signals into continuous knob movement. Each event is a ramp target, not a sound.
+    registerSound(
+      'tb303ctl',
+      (t: number, value: any) => {
+        this.knobLane(t, value);
+        return undefined;
+      },
+      { type: 'synth' },
+    );
+  }
+
+  private knobLane(t: number, value: any): void {
+    if (!this.node) return;
+    const values = extractKnobs(value);
+    if (Object.keys(values).length === 0) return;
+    const rampSec = typeof value.duration === 'number' && value.duration > 0 ? value.duration : 0.03;
+    this.node.port.postMessage({ type: 'knobs', time: t, values, rampSec });
+  }
+
+  /** Release knob lanes (called when new code is evaluated, so removed lanes stop owning parameters). */
+  clearKnobs(): void {
+    this.node?.port.postMessage({ type: 'clearKnobs', time: 0 });
   }
 
   getAnalyser(): AnalyserNode | null {
@@ -102,6 +126,7 @@ export class TB303Bridge {
       slide: plan.slide,
       gateDuration: plan.gateDuration,
       params: plan.params,
+      explicit: plan.explicit,
     });
 
     const closeAt = t + plan.gateDuration + TAIL_SEC;

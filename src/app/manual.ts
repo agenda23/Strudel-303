@@ -18,13 +18,13 @@ export const manualContent = `
       <h3>🚀 Quick Start</h3>
       <p>Use <code>.s("tb303")</code> on any Strudel pattern to route notes to the custom 4-pole diode ladder AudioWorklet.</p>
       <div class="code-box">
-        <pre><code>$: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
+        <pre><code>$: n("0 0 7 4 ~ 2 3 0").scale("c2:minor")
   .s("tb303")
   .accent("0 1 0 0 0 1 0 0")
   .slide("0 0 1 0 0 0 1 0")
   .tbcut(sine.range(300, 3200).slow(4))
   .tbres(0.85).tbenv(0.7).tbdec(0.22)</code></pre>
-        <button class="copy-snippet-btn" data-code='$: n("0 0 12 7 ~ 3 5 0").scale("c2:minor").s("tb303").accent("0 1 0 0 0 1 0 0").slide("0 0 1 0 0 0 1 0").tbcut(sine.range(300, 3200).slow(4)).tbres(0.85).tbenv(0.7).tbdec(0.22)'>Copy</button>
+        <button class="copy-snippet-btn" data-code='$: n("0 0 7 4 ~ 2 3 0").scale("c2:minor").s("tb303").accent("0 1 0 0 0 1 0 0").slide("0 0 1 0 0 0 1 0").tbcut(sine.range(300, 3200).slow(4)).tbres(0.85).tbenv(0.7).tbdec(0.22)'>Copy</button>
       </div>
     </section>
 

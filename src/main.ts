@@ -9,7 +9,11 @@ import {
 } from '@strudel/web';
 import { registerTB303Controls } from './strudel/controls';
 import { TB303Bridge } from './strudel/bridge';
+import { installMasterLimiter, type MasterLimiter } from './strudel/master';
+import { getSuperdoughAudioController } from '@strudel/web';
 import { createCodeEditor } from './app/editor';
+import { connectAgent } from './app/agent';
+import { createMeter } from './strudel/meter';
 import { startHighlighter } from './app/highlight';
 import { openManualModal } from './app/manual';
 import { AIAgentComposer } from './app/composer';
@@ -22,6 +26,17 @@ let bridge: TB303Bridge | null = null;
 let isAudioInitialized = false;
 let editorView: EditorView | null = null;
 let strudelRepl: any = null;
+let masterLimiter: MasterLimiter | null = null;
+let preMeter: ReturnType<typeof createMeter> | null = null;
+let postMeter: ReturnType<typeof createMeter> | null = null;
+const LIMITER_KEY = 'strudel_tb303_limiter';
+const limiterWanted = () => {
+  try {
+    return localStorage.getItem(LIMITER_KEY) !== '0';
+  } catch {
+    return true;
+  }
+};
 let evaluatedCode: string | null = null;
 let animFrameId: number | null = null;
 
@@ -51,7 +66,9 @@ async function setupApp() {
           <input type="number" id="input-bpm" min="80" max="180" value="138" step="1" title="Pattern BPM">
           <span class="bpm-unit">BPM</span>
         </div>
+        <button id="btn-limiter" class="btn btn-secondary" title="Master limiter / soft clipper (prevents digital clipping)">LIMIT</button>
         <button id="btn-manual" class="btn btn-secondary">DOCS</button>
+        <a class="btn btn-secondary" href="https://github.com/agenda23/Strudel-303" target="_blank" rel="noopener noreferrer" title="Source code (AGPL-3.0-or-later)">SOURCE</a>
         <button id="btn-ai-toggle" class="btn btn-secondary">AI ASSIST</button>
         <span id="mcp-status" class="mcp-indicator">AGENT OFFLINE</span>
         <div class="status-badge">
@@ -190,6 +207,11 @@ async function setupApp() {
   }
   const initialCode = savedCode && savedCode.trim() ? savedCode : PRESETS.classic.code;
 
+  // Resume audio on the first interaction (browsers keep the context suspended until then)
+  for (const ev of ['pointerdown', 'keydown'] as const) {
+    document.addEventListener(ev, () => void getAudioContext().resume?.(), { once: true });
+  }
+
   // 3. Initialize CodeMirror
   const editorMount = document.querySelector<HTMLDivElement>('#editor-mount')!;
   editorView = createCodeEditor(editorMount, initialCode, {
@@ -224,6 +246,18 @@ async function setupApp() {
   btnStop.addEventListener('click', () => {
     handleStop();
   });
+
+  document.querySelector('#btn-limiter')?.addEventListener('click', () => {
+    const next = !(masterLimiter ? masterLimiter.isEnabled() : limiterWanted());
+    try {
+      localStorage.setItem(LIMITER_KEY, next ? '1' : '0');
+    } catch {
+      /* storage unavailable */
+    }
+    masterLimiter?.setEnabled(next);
+    syncLimiterButton(next);
+  });
+  syncLimiterButton(limiterWanted());
 
   document.querySelector('#btn-manual')?.addEventListener('click', () => {
     openManualModal();
@@ -290,65 +324,52 @@ async function setupApp() {
   initMcpBridge();
 }
 
-function isMcpEnabled(): boolean {
-  try {
-    return new URLSearchParams(location.search).get('mcp') === '1' || localStorage.getItem('tb303_mcp') === '1';
-  } catch {
-    return false;
-  }
-}
-
 function initMcpBridge(): void {
-  if (!isMcpEnabled()) return; // opt-in: ?mcp=1 or localStorage tb303_mcp=1
-  let ws: WebSocket | null = null;
-  const statusEl = document.querySelector<HTMLElement>('#mcp-status');
-
-  function connect() {
-    try {
-      ws = new WebSocket('ws://localhost:3031');
-
-      ws.onopen = () => {
-        if (statusEl) {
-          statusEl.textContent = 'AGENT READY';
-          statusEl.classList.add('online');
+  connectAgent(
+    {
+      run: async (code) => {
+        if (editorView) {
+          editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: code } });
         }
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'play_pattern' && typeof msg.code === 'string') {
-            if (editorView) {
-              editorView.dispatch({
-                changes: { from: 0, to: editorView.state.doc.length, insert: msg.code },
-              });
-              handleRun(msg.code);
-            }
-          } else if (msg.type === 'stop_playback') {
-            handleStop();
+        return handleRun(code);
+      },
+      stop: () => handleStop(),
+      getState: () => {
+        const st = strudelRepl?.state;
+        const err = st?.evalError || st?.schedulerError;
+        return {
+          code: editorView?.state.doc.toString() ?? '',
+          evaluated: evaluatedCode !== null && evaluatedCode === editorView?.state.doc.toString(),
+          playing: Boolean(st?.started),
+          error: err ? String(err.message || err) : null,
+          bpm: strudelRepl?.scheduler ? Math.round(strudelRepl.scheduler.cps * 240 * 10) / 10 : null,
+          limiter: masterLimiter?.isEnabled() ?? limiterWanted(),
+        };
+      },
+      measureLevels: async (ms) => {
+        if (!preMeter || !postMeter) return { error: 'audio not started yet: run a pattern first' };
+        const [pre, post] = await Promise.all([preMeter(ms), postMeter(ms)]);
+        return { durationMs: ms, preLimiter: pre, postLimiter: post, limiter: masterLimiter?.isEnabled() };
+      },
+      getHaps: (cycles) => {
+        const pattern = strudelRepl?.state?.pattern;
+        const cps = strudelRepl?.scheduler?.cps;
+        if (!pattern || !cps) return { cps: cps ?? null, haps: [], note: 'no pattern evaluated yet' };
+        const haps: any[] = [];
+        for (const h of pattern.queryArc(0, cycles)) {
+          h.ensureObjectValue?.();
+          if (!h.whole || !h.hasOnset?.() || (h.value?.s !== 'tb303' && h.value?.s !== 'tb303ctl')) continue;
+          const value: Record<string, string | number> = {};
+          for (const [k, v] of Object.entries(h.value)) {
+            if (typeof v === 'number' || typeof v === 'string') value[k] = v;
           }
-        } catch (e) {
-          console.error('Error handling MCP message:', e);
+          haps.push({ begin: Number(h.whole.begin.valueOf()), end: Number(h.whole.end.valueOf()), value });
         }
-      };
-
-      ws.onclose = () => {
-        if (statusEl) {
-          statusEl.textContent = 'AGENT OFFLINE';
-          statusEl.classList.remove('online');
-        }
-        setTimeout(connect, 4000); // Retry every 4s
-      };
-
-      ws.onerror = () => {
-        ws?.close();
-      };
-    } catch {
-      setTimeout(connect, 5000);
-    }
-  }
-
-  connect();
+        return { cps, cycles, haps };
+      },
+    },
+    document.querySelector<HTMLElement>('#mcp-status'),
+  );
 }
 
 function setupDistortionControls() {
@@ -399,6 +420,13 @@ function setupDistortionControls() {
   });
 }
 
+function syncLimiterButton(on = masterLimiter ? masterLimiter.isEnabled() : limiterWanted()) {
+  const btn = document.querySelector<HTMLButtonElement>('#btn-limiter');
+  if (!btn) return;
+  btn.textContent = on ? 'LIMIT ON' : 'LIMIT OFF';
+  btn.classList.toggle('active', on);
+}
+
 let samplesPromise: Promise<void> | null = null;
 /** Sample banks are fetched once; failures are reported instead of silently ignored. */
 function loadSamples(): Promise<void> {
@@ -434,11 +462,17 @@ async function ensureAudioReady() {
 
   const audioCtx = getAudioContext();
   if (audioCtx.state === 'suspended') {
-    await audioCtx.resume();
+    // Without a user gesture the browser never resolves resume(); do not block evaluation on it
+    // (an AI agent may drive the page before anyone has clicked). Playback starts after a click.
+    await Promise.race([audioCtx.resume(), new Promise((r) => setTimeout(r, 1000))]);
   }
 
   // Strudel must be initialised first: the bridge registers `tb303` into superdough's sound map.
   strudelRepl = await initStrudel({ prebake: () => loadSamples() });
+  masterLimiter = installMasterLimiter(audioCtx, getSuperdoughAudioController().output.destinationGain, limiterWanted());
+  syncLimiterButton();
+  preMeter = createMeter(audioCtx, getSuperdoughAudioController().output.destinationGain);
+  postMeter = createMeter(audioCtx, masterLimiter.output);
 
   bridge = new TB303Bridge(audioCtx);
   bridge.onWarning = (msg) => console.warn(msg);
@@ -493,27 +527,45 @@ async function ensureAudioReady() {
   isAudioInitialized = true;
 }
 
-async function handleRun(code: string) {
+async function handleRun(code: string): Promise<{ ok: boolean; error?: string; warning?: string }> {
   const errorBanner = document.querySelector<HTMLElement>('#editor-error-banner');
+  const fail = (message: string) => {
+    updateStatus(false, `ERR: ${message}`.slice(0, 60));
+    if (errorBanner) {
+      errorBanner.style.display = 'block';
+      errorBanner.textContent = `[EVAL ERROR] ${message}`;
+    }
+    return { ok: false, error: message };
+  };
   try {
-    localStorage.setItem(SAVED_CODE_KEY, code);
+    try {
+      localStorage.setItem(SAVED_CODE_KEY, code);
+    } catch {
+      /* storage unavailable */
+    }
 
     await ensureAudioReady();
     updateStatus(true);
-    await evaluate(code);
+    bridge?.clearKnobs(); // lanes from the previous code stop owning parameters
+    const pattern = await evaluate(code);
+    // Strudel's evaluate() swallows errors (it logs and returns undefined), so read its state.
+    const evalError = strudelRepl?.state?.evalError;
+    if (evalError || pattern === undefined) {
+      return fail(String(evalError?.message || evalError || 'evaluation failed'));
+    }
     evaluatedCode = code;
 
     if (errorBanner) {
       errorBanner.style.display = 'none';
       errorBanner.textContent = '';
     }
+    const locked = getAudioContext().state !== 'running';
+    return locked
+      ? { ok: true, warning: 'Code evaluated, but the browser has not unlocked audio yet: click once anywhere in the app window to hear it.' }
+      : { ok: true };
   } catch (err: any) {
     console.error('Strudel evaluation error:', err);
-    updateStatus(false, `ERR: ${err?.message || err}`);
-    if (errorBanner) {
-      errorBanner.style.display = 'block';
-      errorBanner.textContent = `[EVAL ERROR] ${err?.message || err}`;
-    }
+    return fail(String(err?.message || err));
   }
 }
 

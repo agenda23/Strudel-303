@@ -23,3 +23,6 @@ scratch/*.wav
 *.njsproj
 *.sln
 *.sw?
+
+# Reference recordings (may be third-party material: never commit)
+docs/sample/

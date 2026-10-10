@@ -1,5 +1,6 @@
 import { PolyBlepOscillator, type TBWaveform } from './polyblep';
 import { DiodeLadderFilter } from './ladder';
+import { TptLadderFilter } from './ladder-tpt';
 import { DistortionUnit, type DistortionType } from './distortion';
 
 export interface TB303Params {
@@ -15,6 +16,30 @@ export interface TB303Params {
   distMix?: number;    // Distortion dry/wet 0.0 to 1.0
   distType?: DistortionType; // 'rat' | 'tube' | 'fuzz'
   distEnabled?: boolean;     // false = bypass the distortion unit
+  filterModel?: FilterModel; // 'tpt' (default) or 'diode' (coupled nonlinear diode ladder)
+  filterDrive?: number;      // 0.0 - 1.0 filter saturation (default: 0 for 'tpt', DIODE_DEFAULT_DRIVE for 'diode')
+  filterAsym?: number;       // 0.0 - 1.0 diode-pair asymmetry of the 'diode' model (even harmonics, bite)
+  vegRelease?: number;       // seconds: amp envelope release after the gate closes (default 0.015)
+  glide?: number;            // seconds: short pitch lag on notes that do not slide (default 0 = instant)
+  slideCurve?: 'log' | 'hz'; // glide shape: 'log' (exponential in semitones, default) or 'hz' (old)
+}
+
+export type FilterModel = 'tpt' | 'diode';
+
+/** Parameters a knob lane can move continuously (see TB303Voice.setKnobs). */
+export const DIODE_DEFAULT_DRIVE = 0.1;
+
+/** filterAsym 1.0 maps to this asymmetry in the diode characteristic (normalised units). */
+export const DIODE_MAX_ASYMMETRY = 1.5;
+
+export type KnobKey = 'cutoff' | 'resonance' | 'envMod' | 'decay' | 'filterDrive' | 'distDrive' | 'distTone';
+export type KnobValues = Partial<Record<KnobKey, number>>;
+
+interface KnobRamp {
+  from: number;
+  to: number;
+  pos: number;
+  len: number;
 }
 
 export interface TB303Trigger {
@@ -22,6 +47,39 @@ export interface TB303Trigger {
   accent: boolean;     // Accent flag
   slide: boolean;      // Slide flag (from current note into this note / legato)
   gateLength: number;  // Gate length in seconds
+}
+
+/**
+ * Voice output trim. Chosen so that, with superdough's default gain (0.8), a plain 303 line sits
+ * about 3 dB under a TR-909 kick instead of ~9 dB under (measured via MCP review, 2026-10-10).
+ */
+export const OUTPUT_LEVEL = 1.2;
+
+/**
+ * On an accented step the filter sweep is short regardless of the DECAY knob (published TB-303
+ * descriptions put it near 200 ms). Not measured on hardware here; tune against a reference.
+ */
+export const ACCENT_MEG_DECAY = 0.2;
+
+/**
+ * A 50% pulse carries ~4.8 dB more power than a saw of the same peak, and after the filter the
+ * square was measured ~5 dB louder. Scale it so switching waveforms does not jump in level.
+ */
+export const SQUARE_LEVEL = 0.55;
+
+/** Level trim for the diode-ladder model so both filter models sit at a similar loudness. */
+export const DIODE_FILTER_LEVEL = 0.68;
+
+/** Input-stage asymmetry of the TPT model at full drive (adds even harmonics). */
+export const TPT_ASYMMETRY = 0.15;
+
+/** Output stage soft saturation: transparent below `knee`, approaches 1.0 smoothly above it. */
+const SOFT_KNEE = 0.8;
+export function softLimit(x: number): number {
+  const a = Math.abs(x);
+  if (a <= SOFT_KNEE) return x;
+  const y = SOFT_KNEE + (1 - SOFT_KNEE) * Math.tanh((a - SOFT_KNEE) / (1 - SOFT_KNEE));
+  return x < 0 ? -y : y;
 }
 
 export const DEFAULT_TB303_PARAMS: TB303Params = {
@@ -37,11 +95,17 @@ export const DEFAULT_TB303_PARAMS: TB303Params = {
   distMix: 1.0,
   distType: 'rat',
   distEnabled: true,
+  filterModel: 'tpt',
+  filterAsym: 0.5,
 };
 
 export class TB303Voice {
   private osc = new PolyBlepOscillator();
-  private filter = new DiodeLadderFilter();
+  private filter = new TptLadderFilter();
+  private diodeFilter = new DiodeLadderFilter();
+  // DC blocker after the filter (asymmetric saturation produces a DC component)
+  private dcX = 0.0;
+  private dcY = 0.0;
   public distortion = new DistortionUnit();
 
   // Control parameters
@@ -70,7 +134,61 @@ export class TB303Voice {
   private accentCharge = 0.0;
   private isAccented = false;
 
+  // Continuous knob lanes: per-parameter ramps toward a target, advanced every sample
+  private knobRamps = new Map<KnobKey, KnobRamp>();
+  private knobOwned = new Set<KnobKey>();
+
   constructor() {}
+
+  /**
+   * Move knobs smoothly: each given parameter ramps from its current value to the target over
+   * `rampSamples` (cutoff in the log-frequency domain, like turning the real knob). Parameters
+   * set this way are "owned" by the lane: later notes keep them unless a note sets them itself.
+   */
+  setKnobs(values: KnobValues, rampSamples: number): void {
+    const len = Math.max(1, Math.round(rampSamples));
+    for (const key of Object.keys(values) as KnobKey[]) {
+      const to = values[key];
+      if (typeof to !== 'number' || !Number.isFinite(to)) continue;
+      const from = Number(this.params[key] ?? to);
+      this.knobRamps.set(key, { from, to, pos: 0, len });
+      this.knobOwned.add(key);
+    }
+  }
+
+  /** Release all knob lanes (new evaluation / stop): parameters fall back to per-note values. */
+  clearKnobs(): void {
+    this.knobRamps.clear();
+    this.knobOwned.clear();
+  }
+
+  /**
+   * Apply a note's parameter set. Parameters owned by a knob lane keep their lane value unless the
+   * note sets them explicitly (an explicit value wins at the note onset and cancels the ramp).
+   */
+  applyNoteParams(p: TB303Params, explicit: ReadonlyArray<keyof TB303Params> = []): void {
+    const next: TB303Params = { ...p };
+    for (const key of this.knobOwned) {
+      if (explicit.includes(key)) {
+        this.knobRamps.delete(key);
+      } else {
+        (next as any)[key] = this.params[key];
+      }
+    }
+    this.params = next;
+  }
+
+  private advanceKnobs(): void {
+    for (const [key, r] of this.knobRamps) {
+      r.pos++;
+      const t = r.pos >= r.len ? 1 : r.pos / r.len;
+      let v: number;
+      if (key === 'cutoff' && r.from > 0 && r.to > 0) v = r.from * Math.pow(r.to / r.from, t);
+      else v = r.from + (r.to - r.from) * t;
+      (this.params as any)[key] = v;
+      if (t >= 1) this.knobRamps.delete(key);
+    }
+  }
 
   /**
    * Trigger a new note event according to TB-303 logic.
@@ -104,9 +222,17 @@ export class TB303Voice {
       this.slideCoeff = Math.exp(-3.0 / slideSamples);
       this.isAttacking = false;
     } else {
-      // NEW NOTE: Reset slide, retrigger MEG and VEG with anti-click micro-attack (~2.5ms)
-      this.slideActive = false;
-      this.currentPitch = freq;
+      // NEW NOTE: retrigger MEG and VEG with an anti-click micro-attack (~2.5ms).
+      // Pitch moves instantly, or with a very short lag when `glide` is set (the pitch CV of the
+      // real machine passes through small RC stages, which smooths note-to-note steps).
+      const glide = this.params.glide ?? 0;
+      if (glide > 0 && this.vegLevel > 0.01) {
+        this.slideActive = true;
+        this.slideCoeff = Math.exp(-3.0 / Math.max(1, glide * sampleRate));
+      } else {
+        this.slideActive = false;
+        this.currentPitch = freq;
+      }
       // 2.5ms attack rate calculation to prevent pop/click on steep onsets
       const attackSamples = Math.max(1, Math.round(0.0025 * sampleRate));
       this.vegAttackRate = (1.0 - this.vegLevel) / attackSamples;
@@ -129,6 +255,8 @@ export class TB303Voice {
    * Process a single audio output sample.
    */
   process(sampleRate: number): number {
+    if (this.knobRamps.size > 0) this.advanceKnobs();
+
     // 1. Gate countdown
     if (this.gate) {
       if (this.gateSamplesRemaining > 0) {
@@ -139,13 +267,26 @@ export class TB303Voice {
       }
     }
 
-    // 2. Pitch / Slide smoothing
+    // 2. Pitch / Slide smoothing. The real RC acts on the (exponential) pitch control voltage, so the
+    //    glide is exponential in semitones, not in Hz: equal speed up and down, and a straight
+    //    contour on a logarithmic frequency axis. `slideCurve: 'hz'` keeps the old linear-Hz behaviour.
     if (this.slideActive) {
-      this.currentPitch =
-        this.targetPitch + (this.currentPitch - this.targetPitch) * this.slideCoeff;
-      if (Math.abs(this.currentPitch - this.targetPitch) < 0.1) {
-        this.currentPitch = this.targetPitch;
-        this.slideActive = false;
+      if (this.params.slideCurve === 'hz') {
+        this.currentPitch =
+          this.targetPitch + (this.currentPitch - this.targetPitch) * this.slideCoeff;
+        if (Math.abs(this.currentPitch - this.targetPitch) < 0.1) {
+          this.currentPitch = this.targetPitch;
+          this.slideActive = false;
+        }
+      } else {
+        const lt = Math.log2(this.targetPitch);
+        const lp = lt + (Math.log2(this.currentPitch) - lt) * this.slideCoeff;
+        if (Math.abs(lp - lt) < 1e-4) {
+          this.currentPitch = this.targetPitch;
+          this.slideActive = false;
+        } else {
+          this.currentPitch = Math.pow(2, lp);
+        }
       }
     } else {
       this.currentPitch = this.targetPitch;
@@ -161,9 +302,9 @@ export class TB303Voice {
         this.isAttacking = false;
       }
     } else {
-      // MEG: Decay rate decreases when accented
+      // MEG: accented steps use a short, fixed sweep (see ACCENT_MEG_DECAY)
       const effectiveDecay = this.isAccented
-        ? this.params.decay * 0.7
+        ? Math.min(this.params.decay, ACCENT_MEG_DECAY)
         : this.params.decay;
       const megDecayRate = Math.exp(-1.0 / (Math.max(0.01, effectiveDecay) * sampleRate));
       this.megLevel *= megDecayRate;
@@ -172,7 +313,7 @@ export class TB303Voice {
     // VEG: Fast attack, when gate closed exponential decay (~15ms release)
     if (!this.gate) {
       this.isAttacking = false;
-      const vegReleaseRate = Math.exp(-1.0 / (0.015 * sampleRate));
+      const vegReleaseRate = Math.exp(-1.0 / (Math.max(0.002, this.params.vegRelease ?? 0.015) * sampleRate));
       this.vegLevel *= vegReleaseRate;
     }
 
@@ -193,24 +334,37 @@ export class TB303Voice {
     const modCutoff = this.currentCutoff * Math.pow(2.0, this.megLevel * envModAmount * 3.5);
 
     // 6. VCO
-    const oscSample = this.osc.process(
-      this.currentPitch,
-      sampleRate,
-      this.params.waveform
-    );
+    const oscSample =
+      this.osc.process(this.currentPitch, sampleRate, this.params.waveform) *
+      (this.params.waveform === 'square' ? SQUARE_LEVEL : 1.0);
 
     // 7. VCF
-    const filteredSample = this.filter.process(
-      oscSample,
-      modCutoff,
-      this.currentResonance,
-      sampleRate
-    );
+    const isDiode = this.params.filterModel === 'diode';
+    const drive = Math.min(1, Math.max(0, this.params.filterDrive ?? (isDiode ? DIODE_DEFAULT_DRIVE : 0)));
+    let filteredSample: number;
+    if (isDiode) {
+      this.diodeFilter.drive = 1.0 + 14.0 * drive;
+      this.diodeFilter.asymmetry = DIODE_MAX_ASYMMETRY * Math.min(1, Math.max(0, this.params.filterAsym ?? 0.5));
+      filteredSample =
+        this.diodeFilter.process(oscSample, modCutoff, this.currentResonance, sampleRate) * DIODE_FILTER_LEVEL;
+    } else {
+      this.filter.drive = 1.0 + 5.0 * drive;
+      this.filter.asymmetry = TPT_ASYMMETRY * drive;
+      filteredSample = this.filter.process(oscSample, modCutoff, this.currentResonance, sampleRate);
+    }
+    {
+      // One-pole DC blocker, corner ~10 Hz
+      const R = 1.0 - (2.0 * Math.PI * 10.0) / sampleRate;
+      const y = filteredSample - this.dcX + R * this.dcY;
+      this.dcX = filteredSample;
+      this.dcY = y;
+      filteredSample = y;
+    }
 
     // 8. VCA (with accent volume boost and note gain)
     const vcaAccentBoost = this.isAccented ? 1.4 + this.accentCharge * 0.3 : 1.0;
     const noteGain = typeof this.params.gain === 'number' ? this.params.gain : 1.0;
-    const output = filteredSample * this.vegLevel * vcaAccentBoost * 0.7 * noteGain;
+    const output = filteredSample * this.vegLevel * vcaAccentBoost * OUTPUT_LEVEL;
 
     // 9. Post-VCA Distortion Unit
     if (this.params.distDrive !== undefined) this.distortion.params.drive = this.params.distDrive;
@@ -219,12 +373,17 @@ export class TB303Voice {
     if (this.params.distType !== undefined) this.distortion.params.type = this.params.distType;
     if (this.params.distEnabled !== undefined) this.distortion.params.enabled = this.params.distEnabled;
 
-    return this.distortion.process(output, sampleRate);
+    // Final soft limit after the distortion (resonance spikes and accents stay under full scale)
+    return softLimit(this.distortion.process(output, sampleRate)) * noteGain;
   }
 
   reset(): void {
     this.osc.reset();
     this.filter.reset();
+    this.diodeFilter.reset();
+    this.clearKnobs();
+    this.dcX = 0.0;
+    this.dcY = 0.0;
     this.distortion.reset();
     this.megLevel = 0.0;
     this.vegLevel = 0.0;

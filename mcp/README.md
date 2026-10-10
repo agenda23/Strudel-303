@@ -6,20 +6,23 @@ Model Context Protocol (MCP) server for the Strudel × TB-303 Acid Synthesizer a
 
 ## 🛠 Available Tools
 
-1. **`tb303_get_reference`**
-   - Returns the complete syntax reference, parameter guide (cutoff, resonance, accent, slide, distortion), and Roland TR-909 pattern formats.
+| Tool | Description |
+| --- | --- |
+| `tb303_get_reference` | Syntax reference and parameter guide (scale degrees, mixing, controls). |
+| `tb303_generate_pattern` | Generates an acid pattern (style, root, scale, distortion) with tempo and balanced drum gains. |
+| `tb303_list_clients` | Lists connected browser windows (id, title, url). |
+| `tb303_play_live_pattern` | Puts code into the app editor, evaluates and plays it. **Returns the evaluation result** (success, or the error message). |
+| `tb303_stop_live_playback` | Stops playback (hush). |
+| `tb303_get_state` | Editor code, evaluated/playing flags, last error, BPM, limiter state. |
+| `tb303_get_levels` | Measures the real output for a few seconds: peak / RMS / clipped samples before and after the master limiter. |
+| `tb303_render_current` | Renders the 303 part of the loaded pattern offline (same trigger logic as playback), saves a WAV and returns metrics (peak, RMS dB, clipping, spectral centroid, activity, per-bar RMS). |
+| `tb303_render_audio_file` | Renders a fixed 16-step 303 demo sequence to WAV with the internal DSP. |
 
-2. **`tb303_generate_pattern`**
-   - Procedurally generates executable Strudel × TB-303 acid patterns based on style (`classic`, `hard_rat`, `square_screamer`, `trance`, `minimal`), root key, scale, and distortion.
+Tools that take `target` can address one window by id (default: all connected windows).
 
-3. **`tb303_play_live_pattern`**
-   - Injects the generated pattern code directly into the active browser live-coding environment (`http://localhost:3000/`) over WebSocket and starts immediate playback.
+The browser cannot play audio until the page has been clicked once; evaluation (and its errors) work regardless, and `tb303_play_live_pattern` adds a warning when audio is still locked.
 
-4. **`tb303_stop_live_playback`**
-   - Stops playback in all connected browser windows (Hush).
-
-5. **`tb303_render_audio_file`**
-   - Uses the internal pure TypeScript DSP engine (PolyBLEP + 4-Pole TPT Diode Ladder + Acid Overdrive) to render a TB-303 acid sequence offline into a 16-bit 44.1kHz WAV file.
+If the bridge port is taken by another server, tools fail with the reason. Use `TB303_WS_PORT=<port>` for the server and `?mcp=1&mcpport=<port>` for the app. The server exits when the MCP client disconnects.
 
 ---
 

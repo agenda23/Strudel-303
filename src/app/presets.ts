@@ -15,7 +15,7 @@ export const PRESETS: Record<string, PresetDefinition> = {
     code: `// Classic Acid Bassline (138 BPM)
 setcps(138/60/4)
 
-$: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
+$: n("0 0 7 4 ~ 2 3 0").scale("c2:minor")
   .s("tb303")
   .accent("0 1 0 0 0 1 0 0")
   .slide("0 0 1 0 0 0 1 0")
@@ -23,10 +23,10 @@ $: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
   .tbres(0.85)
   .tbenv(0.68)
   .tbdec(0.24)
-  .gain(0.9)
+  .gain(0.7)
 
-$: s("bd*4, ~ cp ~ cp").bank("RolandTR909")
-$: s("hh*8, [~ oh]*4").bank("RolandTR909").cut(1)
+$: s("bd*4, ~ cp ~ cp").bank("RolandTR909").gain(0.6)
+$: s("hh*8, [~ oh]*4").bank("RolandTR909").gain(0.35).cut(1)
 `,
   },
 
@@ -38,7 +38,7 @@ $: s("hh*8, [~ oh]*4").bank("RolandTR909").cut(1)
     code: `// Hard Acid with RAT Diode Clipping (140 BPM)
 setcps(140/60/4)
 
-$: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
+$: n("0 0 7 4 ~ 2 3 0").scale("c2:minor")
   .s("tb303")
   .accent("0 1 0 0 0 1 0 0")
   .slide("0 0 1 0 0 0 1 0")
@@ -49,10 +49,10 @@ $: n("0 0 12 7 ~ 3 5 0").scale("c2:minor")
   .tbdist(0.85)
   .tbdisttone(0.65)
   .tbdisttype("rat")
-  .gain(0.85)
+  .gain(0.7)
 
-$: s("bd*4, [~ cp]*2").bank("RolandTR909")
-$: s("hh*8, [~ oh]*4, ~ ~ ~ rd*2").bank("RolandTR909").cut(1)
+$: s("bd*4, [~ cp]*2").bank("RolandTR909").gain(0.6)
+$: s("hh*8, [~ oh]*4, ~ ~ ~ rd*2").bank("RolandTR909").gain(0.35).cut(1)
 `,
   },
 
@@ -64,7 +64,7 @@ $: s("hh*8, [~ oh]*4, ~ ~ ~ rd*2").bank("RolandTR909").cut(1)
     code: `// Square Wave Hollow Acid (136 BPM)
 setcps(136/60/4)
 
-$: n("0 3 7 10 12 10 7 3").scale("c2:minor")
+$: n("0 2 4 6 7 6 4 2").scale("c2:minor")
   .s("tb303")
   .tbwave("square")
   .accent("1 0 1 0 0 1 0 1")
@@ -74,10 +74,10 @@ $: n("0 3 7 10 12 10 7 3").scale("c2:minor")
   .tbenv(0.80)
   .tbdec(0.18)
   .tbdist(0.55)
-  .gain(0.9)
+  .gain(0.5)
 
-$: s("bd*4, [~ cp]*2").bank("RolandTR909")
-$: s("hh*16").bank("RolandTR909").cut(1)
+$: s("bd*4, [~ cp]*2").bank("RolandTR909").gain(0.6)
+$: s("hh*16").bank("RolandTR909").gain(0.35).cut(1)
 `,
   },
 
@@ -89,7 +89,7 @@ $: s("hh*16").bank("RolandTR909").cut(1)
     code: `// Peak-Time Acid Trance (142 BPM)
 setcps(142/60/4)
 
-$: n("0 7 12 14 12 7 5 3").scale("d2:minor")
+$: n("0 4 7 8 7 4 3 2").scale("d2:minor")
   .s("tb303")
   .accent("0 1 0 1 0 1 0 1")
   .slide("1 0 1 0 1 0 1 0")
@@ -100,10 +100,10 @@ $: n("0 7 12 14 12 7 5 3").scale("d2:minor")
   .tbslidetime(0.08)
   .tbdist(0.60)
   .tbdisttype("tube")
-  .gain(0.85)
+  .gain(0.7)
 
-$: s("bd*4, ~ cp ~ cp").bank("RolandTR909")
-$: s("[~ oh]*4, rd*8").bank("RolandTR909").cut(1)
+$: s("bd*4, ~ cp ~ cp").bank("RolandTR909").gain(0.6)
+$: s("[~ oh]*4, rd*8").bank("RolandTR909").gain(0.35).cut(1)
 `,
   },
 
@@ -115,7 +115,7 @@ $: s("[~ oh]*4, rd*8").bank("RolandTR909").cut(1)
     code: `// Minimal Detroit Sub-Bass (132 BPM)
 setcps(132/60/4)
 
-$: n("0 ~ 0 0 ~ 3 0 ~").scale("f1:minor")
+$: n("0 ~ 0 0 ~ 2 0 ~").scale("f1:minor")
   .s("tb303")
   .accent("0 0 1 0 0 1 0 0")
   .slide("0 0 0 1 0 0 0 0")
@@ -123,10 +123,10 @@ $: n("0 ~ 0 0 ~ 3 0 ~").scale("f1:minor")
   .tbres(0.65)
   .tbenv(0.50)
   .tbdec(0.35)
-  .gain(1.0)
+  .gain(0.75)
 
-$: s("bd*4, ~ rm ~ rm").bank("RolandTR909")
-$: s("hh*8").bank("RolandTR909").cut(1)
+$: s("bd*4, ~ rm ~ rm").bank("RolandTR909").gain(0.6)
+$: s("hh*8").bank("RolandTR909").gain(0.35).cut(1)
 `,
   },
 };

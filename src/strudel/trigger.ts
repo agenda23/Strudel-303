@@ -71,6 +71,8 @@ export interface TriggerPlan {
   legacyN: boolean;
   /** this note's own slide flag, i.e. it glides into the NEXT note */
   slideOut: boolean;
+  /** voice parameters this note set explicitly (the rest take defaults unless a knob lane owns them) */
+  explicit: Array<keyof TB303Params>;
 }
 
 /**
@@ -101,20 +103,51 @@ export function planTrigger(
   state.prevGateEnd = t + gateDuration;
 
   const params: TB303Params = { ...DEFAULT_TB303_PARAMS, ...ui };
-  if (typeof val.tbcut === 'number') params.cutoff = val.tbcut;
-  if (typeof val.tbres === 'number') params.resonance = val.tbres;
-  if (typeof val.tbenv === 'number') params.envMod = val.tbenv;
-  if (typeof val.tbdec === 'number') params.decay = val.tbdec;
-  if (val.tbwave === 'saw' || val.tbwave === 'square') params.waveform = val.tbwave;
-  if (typeof val.tbslidetime === 'number') params.slideTime = val.tbslidetime;
-  if (typeof val.tbdist === 'number') params.distDrive = val.tbdist;
-  if (typeof val.tbdisttone === 'number') params.distTone = val.tbdisttone;
-  if (typeof val.tbdistmix === 'number') params.distMix = val.tbdistmix;
+  const explicit: Array<keyof TB303Params> = [];
+  const set = <K extends keyof TB303Params>(key: K, value: TB303Params[K]) => {
+    params[key] = value;
+    explicit.push(key);
+  };
+  if (typeof val.tbcut === 'number') set('cutoff', val.tbcut);
+  if (typeof val.tbres === 'number') set('resonance', val.tbres);
+  if (typeof val.tbenv === 'number') set('envMod', val.tbenv);
+  if (typeof val.tbdec === 'number') set('decay', val.tbdec);
+  if (val.tbwave === 'saw' || val.tbwave === 'square') set('waveform', val.tbwave);
+  if (typeof val.tbslidetime === 'number') set('slideTime', val.tbslidetime);
+  if (typeof val.tbdist === 'number') set('distDrive', val.tbdist);
+  if (typeof val.tbdisttone === 'number') set('distTone', val.tbdisttone);
+  if (typeof val.tbdistmix === 'number') set('distMix', val.tbdistmix);
   if (val.tbdisttype === 'rat' || val.tbdisttype === 'tube' || val.tbdisttype === 'fuzz') {
-    params.distType = val.tbdisttype;
+    set('distType', val.tbdisttype);
   }
+  if (val.tbfilter === 'tpt' || val.tbfilter === 'diode') set('filterModel', val.tbfilter);
+  if (typeof val.tbdrive === 'number') set('filterDrive', Math.min(1, Math.max(0, val.tbdrive)));
+  if (typeof val.tbrel === 'number') set('vegRelease', Math.min(0.5, Math.max(0.002, val.tbrel)));
+  if (typeof val.tbglide === 'number') set('glide', Math.min(0.2, Math.max(0, val.tbglide)));
+  if (val.tbslidecurve === 'log' || val.tbslidecurve === 'hz') set('slideCurve', val.tbslidecurve);
+  if (typeof val.tbasym === 'number') set('filterAsym', Math.min(1, Math.max(0, val.tbasym)));
   // gain / velocity are applied by superdough's chain, not inside the voice.
   params.gain = 1;
 
-  return { freq, accent: Number(val.accent) > 0, slide, gateDuration, params, legacyN, slideOut };
+  return { freq, accent: Number(val.accent) > 0, slide, gateDuration, params, legacyN, slideOut, explicit };
+}
+
+/**
+ * Continuous "knob lane" values: controls on an `s("tb303ctl")` event become ramp targets for the
+ * voice's cutoff / resonance / env mod / decay / drive / distortion, so a signal such as
+ * sine.range(...) moves the knob smoothly instead of once per note.
+ */
+export type KnobParams = Partial<Pick<TB303Params, 'cutoff' | 'resonance' | 'envMod' | 'decay' | 'filterDrive' | 'distDrive' | 'distTone'>>;
+
+export function extractKnobs(val: Record<string, any>): KnobParams {
+  const k: KnobParams = {};
+  const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+  if (num(val.tbcut)) k.cutoff = Math.max(20, val.tbcut);
+  if (num(val.tbres)) k.resonance = Math.min(1, Math.max(0, val.tbres));
+  if (num(val.tbenv)) k.envMod = Math.min(1, Math.max(0, val.tbenv));
+  if (num(val.tbdec)) k.decay = Math.max(0.02, val.tbdec);
+  if (num(val.tbdrive)) k.filterDrive = Math.min(1, Math.max(0, val.tbdrive));
+  if (num(val.tbdist)) k.distDrive = Math.min(1, Math.max(0, val.tbdist));
+  if (num(val.tbdisttone)) k.distTone = Math.min(1, Math.max(0, val.tbdisttone));
+  return k;
 }

@@ -1,0 +1,25 @@
+// HARDFLOOR-STYLE ACID v2 (diode filter model: A/B against hardfloor-acid-136.js) -- 136 BPM, A minor
+// 303 line: short staccato gates (legato .5), slides tie into the next note,
+// filter opens on a 4-bar saw ramp over a slow 16-bar swell. n() = scale degrees (7 = octave)
+setcps(136/60/4)
+
+$: n("<[0 0 7 0 0 4 0 7 0 0 7 0 3 4 0 6] [0 ~ 0 7 0 0 4 ~ 0 7 0 0 6 0 4 3] [0 0 7 0 0 4 0 7 0 0 7 0 3 4 0 6] [0 0 4 7 0 0 7 4 0 0 3 7 0 6 4 0]>").scale("a1:minor")
+  .s("tb303")
+  .tbwave("<saw saw saw saw saw saw saw saw saw saw saw saw square square saw saw>")
+  .accent("<[1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0] [1 0 0 1 0 1 0 0 1 0 0 1 0 0 1 0]>")
+  .slide("<[0 0 1 0 0 0 0 1 0 0 1 0 0 0 1 0] [0 0 0 1 0 0 0 0 0 1 0 0 0 1 0 0] [0 0 1 0 0 0 0 1 0 0 1 0 0 0 1 0] [0 1 0 0 0 1 0 0 0 0 1 0 0 1 0 0]>")
+  .legato(0.5)
+  .tbcut(sine.range(260, 1500).slow(16).add(saw.range(0, 900).slow(4)))
+  .tbres(0.88).tbenv(0.85).tbdec(0.2)
+  .tbdist(0.25).tbdisttype("rat")
+  .tbfilter("diode").tbdrive(0.3)
+  .mask("<0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1>")
+
+$: s("bd*4").bank("RolandTR909").gain(0.55)
+  .mask("<1 1 1 1 1 1 1 1 0 0 1 1 1 1 1 1>")
+$: s("~ cp ~ cp").bank("RolandTR909").gain(0.45)
+  .mask("<0 0 1 1 1 1 1 1 0 0 1 1 1 1 1 1>")
+$: s("[~ oh]*4").bank("RolandTR909").cut(1).gain(0.3)
+  .mask("<0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1>")
+$: s("hh*16").bank("RolandTR909").cut(1).gain("[0.22 0.38 0.3 0.38]*4")
+  .mask("<0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1>")

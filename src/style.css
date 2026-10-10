@@ -880,3 +880,10 @@ aside {
 .manual-table td code {
   color: var(--accent-amber);
 }
+
+/* Link-styled buttons (e.g. SOURCE) */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
